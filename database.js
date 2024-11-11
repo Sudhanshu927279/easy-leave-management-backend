@@ -1,35 +1,26 @@
-const sqlite3 = require('sqlite3').verbose();
+// Replace sqlite3 with better-sqlite3
+const Database = require('better-sqlite3');
 const bcrypt = require('bcryptjs');
 
 // Create and open the SQLite database
-const db = new sqlite3.Database('./database.db', (err) => {
-    if (err) {
-        console.error('Error opening database:', err.message);
-    } else {
-        console.log('Connected to the SQLite database.');
-    }
-});
+const db = new Database('./database.db', { verbose: console.log }); // Open database file
 
 // Function to create tables (Departments and Users)
 function createTables() {
-    return new Promise((resolve, reject) => {
+    try {
         // Create Departments table
-        db.run(`
+        db.prepare(`
             CREATE TABLE IF NOT EXISTS departments (
                 id INTEGER PRIMARY KEY,
                 department_name TEXT UNIQUE,
                 manager TEXT
             )
-        `, (err) => {
-            if (err) {
-                reject('Error creating departments table: ' + err.message);
-            } else {
-                console.log('Departments table created or already exists.');
-            }
-        });
+        `).run();  // Use synchronous .run() method in better-sqlite3
+
+        console.log('Departments table created or already exists.');
 
         // Create Users table
-        db.run(`
+        db.prepare(`
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY,
                 username TEXT UNIQUE,
@@ -39,15 +30,13 @@ function createTables() {
                 leave_balance INTEGER DEFAULT 20,
                 FOREIGN KEY (department_id) REFERENCES departments(id)
             )
-        `, (err) => {
-            if (err) {
-                reject('Error creating users table: ' + err.message);
-            } else {
-                console.log('Users table created or already exists.');
-                resolve();
-            }
-        });
-    });
+        `).run();  // Same as above
+
+        console.log('Users table created or already exists.');
+
+    } catch (err) {
+        console.error('Error creating tables:', err);
+    }
 }
 
 // Insert departments into the database
@@ -62,21 +51,17 @@ function insertDepartments() {
         { department_name: 'Research & Development', manager: 'Nina Gupta' }
     ];
 
-    return new Promise((resolve, reject) => {
-        departments.forEach((department, index) => {
-            db.run('INSERT OR IGNORE INTO departments (department_name, manager) VALUES (?, ?)', 
-                [department.department_name, department.manager], (err) => {
-                    if (err) {
-                        reject('Error inserting department: ' + err.message);
-                    } else {
-                        console.log('Department inserted:', department.department_name);
-                        if (index === departments.length - 1) {
-                            resolve();
-                        }
-                    }
-                });
+    try {
+        const insertStmt = db.prepare('INSERT OR IGNORE INTO departments (department_name, manager) VALUES (?, ?)');
+
+        // Insert each department into the database
+        departments.forEach((department) => {
+            insertStmt.run(department.department_name, department.manager);
+            console.log('Department inserted:', department.department_name);
         });
-    });
+    } catch (err) {
+        console.error('Error inserting departments:', err);
+    }
 }
 
 // Insert users (employees) into the database
@@ -104,52 +89,40 @@ function insertUsers() {
         { username: 'Abhishek', password: 'password123', department_name: 'System Administration', role: 'user' }
     ];
 
-    return new Promise((resolve, reject) => {
-        users.forEach((user, index) => {
-            const hashedPassword = bcrypt.hashSync(user.password, 10);  // Hash password
-            
-            // Get department id based on department name
-            db.get('SELECT id FROM departments WHERE department_name = ?', [user.department_name], (err, row) => {
-                if (err) {
-                    reject('Error fetching department id: ' + err.message);
-                } else if (row) {
-                    // Insert user into the 'users' table with hashed password and department id
-                    db.run('INSERT INTO users (username, password, department_id, role) VALUES (?, ?, ?, ?)', 
-                        [user.username, hashedPassword, row.id, user.role], (err) => {
-                            if (err) {
-                                reject('Error inserting user: ' + err.message);
-                            } else {
-                                console.log('User inserted:', user.username);
-                                if (index === users.length - 1) {
-                                    resolve();
-                                }
-                            }
-                        });
-                } else {
-                    console.log(`Department not found for user ${user.username}: ${user.department_name}`);
-                }
-            });
+    try {
+        const selectDeptStmt = db.prepare('SELECT id FROM departments WHERE department_name = ?');
+        const insertUserStmt = db.prepare('INSERT INTO users (username, password, department_id, role) VALUES (?, ?, ?, ?)');
+
+        // Insert each user into the database
+        users.forEach((user) => {
+            const hashedPassword = bcrypt.hashSync(user.password, 10);  // Hash the password
+
+            // Get department ID based on department name
+            const department = selectDeptStmt.get(user.department_name);
+            if (department) {
+                insertUserStmt.run(user.username, hashedPassword, department.id, user.role);
+                console.log('User inserted:', user.username);
+            } else {
+                console.log(`Department not found for user ${user.username}: ${user.department_name}`);
+            }
         });
-    });
+    } catch (err) {
+        console.error('Error inserting users:', err);
+    }
 }
 
 // Run all the database creation and insertion steps in order
 async function setupDatabase() {
     try {
-        await createTables();   // Ensure both tables are created first
-        await insertDepartments();  // Insert departments
-        await insertUsers();  // Insert users
+        createTables();  // Ensure both tables are created first
+        insertDepartments();  // Insert departments
+        insertUsers();  // Insert users
         console.log('Database setup completed successfully!');
     } catch (error) {
         console.error('Error during database setup:', error);
     } finally {
-        db.close((err) => {
-            if (err) {
-                console.error('Error closing the database:', err.message);
-            } else {
-                console.log('Database connection closed.');
-            }
-        });
+        db.close();  // Close the database
+        console.log('Database connection closed.');
     }
 }
 

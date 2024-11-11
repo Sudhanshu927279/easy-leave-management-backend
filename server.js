@@ -1,8 +1,10 @@
 const express = require('express');
-const sqlite3 = require('sqlite3').verbose();
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const cors = require('cors');
+
+// Replace sqlite3 with better-sqlite3
+const Database = require('better-sqlite3');
 
 // Create an Express app
 const app = express();
@@ -13,24 +15,16 @@ app.use(cors());
 // Parse JSON bodies (for POST requests)
 app.use(express.json());
 
-// Open the SQLite database
-const db = new sqlite3.Database('./database.db', (err) => {
-    if (err) {
-        console.error('Error opening database:', err.message);
-    } else {
-        console.log('Connected to the SQLite database.');
-    }
-});
+// Open the SQLite database using better-sqlite3
+const db = new Database('./database.db', { verbose: console.log }); // Open database file
 
 // Login Route: Authenticate users and return a JWT
 app.post('/login', (req, res) => {
     const { username, password } = req.body;
 
-    // Query the database for the user
-    db.get('SELECT * FROM users WHERE username = ?', [username], (err, row) => {
-        if (err) {
-            return res.status(500).json({ message: 'Database error' });
-        }
+    try {
+        // Query the database for the user
+        const row = db.prepare('SELECT * FROM users WHERE username = ?').get(username);
 
         if (!row) {
             return res.status(404).json({ message: 'User not found' });
@@ -53,58 +47,56 @@ app.post('/login', (req, res) => {
                 return res.status(401).json({ message: 'Incorrect password' });
             }
         });
-    });
+    } catch (err) {
+        return res.status(500).json({ message: 'Database error' });
+    }
 });
 
 // Get All Departments Route
 app.get('/departments', (req, res) => {
-    db.all('SELECT * FROM departments', [], (err, rows) => {
-        if (err) {
-            return res.status(500).json({ message: 'Database error' });
-        }
+    try {
+        const rows = db.prepare('SELECT * FROM departments').all();
         res.json(rows);
-    });
+    } catch (err) {
+        return res.status(500).json({ message: 'Database error' });
+    }
 });
 
 // Get Users by Department Route
 app.get('/users/:departmentId', (req, res) => {
     const departmentId = req.params.departmentId;
 
-    db.all('SELECT * FROM users WHERE department_id = ?', [departmentId], (err, rows) => {
-        if (err) {
-            return res.status(500).json({ message: 'Database error' });
-        }
+    try {
+        const rows = db.prepare('SELECT * FROM users WHERE department_id = ?').all(departmentId);
         res.json(rows);
-    });
+    } catch (err) {
+        return res.status(500).json({ message: 'Database error' });
+    }
 });
 
 // Leave Request Route (For Employee Leave)
 app.post('/leave-request', (req, res) => {
     const { userId, leaveDays } = req.body;
 
-    // Update leave balance for the user
-    db.get('SELECT * FROM users WHERE id = ?', [userId], (err, row) => {
-        if (err) {
-            return res.status(500).json({ message: 'Database error' });
-        }
+    try {
+        const user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
 
-        if (!row) {
+        if (!user) {
             return res.status(404).json({ message: 'User not found' });
         }
 
-        const newLeaveBalance = row.leave_balance - leaveDays;
+        const newLeaveBalance = user.leave_balance - leaveDays;
 
         if (newLeaveBalance < 0) {
             return res.status(400).json({ message: 'Not enough leave balance' });
         }
 
-        db.run('UPDATE users SET leave_balance = ? WHERE id = ?', [newLeaveBalance, userId], (err) => {
-            if (err) {
-                return res.status(500).json({ message: 'Error updating leave balance' });
-            }
-            res.json({ message: 'Leave request approved', leave_balance: newLeaveBalance });
-        });
-    });
+        db.prepare('UPDATE users SET leave_balance = ? WHERE id = ?').run(newLeaveBalance, userId);
+
+        res.json({ message: 'Leave request approved', leave_balance: newLeaveBalance });
+    } catch (err) {
+        return res.status(500).json({ message: 'Error processing leave request' });
+    }
 });
 
 // Start the server
